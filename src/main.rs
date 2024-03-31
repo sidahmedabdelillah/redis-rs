@@ -2,6 +2,8 @@ use std::sync::Arc;
 
 use anyhow::Error;
 use clap::Parser;
+use rand::distributions::Alphanumeric;
+use rand::{thread_rng, Rng};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -43,6 +45,32 @@ pub struct Server {
     pub port: String,
     pub host: String,
     pub replicat_of: Option<(String, String)>,
+    pub replid: String,
+    pub master_replid: Option<String>,
+}
+
+impl Server {
+    pub fn new(
+        role: ServerRole,
+        port: String,
+        host: String,
+        replicat_of: Option<(String, String)>,
+        master_replid: Option<String>,
+    ) -> Self {
+        let replid: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(40)
+            .map(char::from)
+            .collect();
+        Server {
+            role,
+            port,
+            host,
+            replicat_of,
+            replid,
+            master_replid,
+        }
+    }
 }
 
 #[tokio::main]
@@ -57,19 +85,20 @@ async fn main() -> Result<(), Error> {
             if replicatof.len() != 2 {
                 panic!("replicatof must have 2 arguments");
             }
-            Server {
-                role: ServerRole::Slave,
-                port: port,
-                host: host,
-                replicat_of: Some((replicatof[0].to_string(), replicatof[1].to_string())),
-            }
+            let replid: String = thread_rng()
+                .sample_iter(&Alphanumeric)
+                .take(40)
+                .map(char::from)
+                .collect();
+            Server::new(
+                ServerRole::Slave,
+                port,
+                host,
+                Some((replicatof[0].to_string(), replicatof[1].to_string())),
+                Some(replid),
+            )
         }
-        None => Server {
-            role: ServerRole::Master,
-            port: port,
-            host: host,
-            replicat_of: None,
-        },
+        None => Server::new(ServerRole::Master, port, host, None, None),
     };
 
     let server = Arc::new(server);
