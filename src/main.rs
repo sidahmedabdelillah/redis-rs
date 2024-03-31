@@ -1,4 +1,4 @@
-use std::{io::Write, net::TcpListener};
+use std::{io::Write, net::TcpListener, net::TcpStream};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -11,12 +11,19 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                let pong = "+PONG\r\n";
-                _stream.write_all(pong.as_bytes()).unwrap();
+                handle_client(_stream);
             }
             Err(e) => {
                 println!("error: {}", e);
             }
         }
+    }
+}
+
+
+fn handle_client(mut stream: TcpStream) {
+    loop {
+        let pong = "+PONG\r\n";
+        stream.write_all(pong.as_bytes()).unwrap();
     }
 }
