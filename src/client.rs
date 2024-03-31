@@ -45,7 +45,7 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
 
     let _ = client.stream.read(&mut handshake_buf).await.unwrap();
 
-    println!("Debug: Sending replconf");
+    println!("Debug: Sending replconf 1 ");
     client
         .send_commands(vec![
             "replconf".to_string(),
@@ -53,6 +53,17 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
             server.port.clone(),
         ])
         .await;
+
+    let _ = client.stream.read(&mut handshake_buf).await.unwrap();
+    println!("Debug: Sending replconf 2 ");
+    client
+    .send_commands(vec![
+        "replconf".to_string(),
+        "capa ".to_string(),
+        "psync2 ".to_string(),
+    ])
+    .await;
+
 
     return Ok(());
 }
