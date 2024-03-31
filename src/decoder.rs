@@ -5,6 +5,7 @@ pub enum PacketTypes {
     SimpleString(String),
     INTEGER(usize),
     BulkString(String),
+    NullBulkString,
     Array(Vec<PacketTypes>),
 }
 
@@ -45,6 +46,7 @@ impl PacketTypes {
                 }
                 result
             },
+            PacketTypes::NullBulkString => "$-1\r\n".to_string(),
             _ => {
                 println!("Invalid command");
                 return String::from("");
