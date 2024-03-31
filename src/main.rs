@@ -27,7 +27,7 @@ async fn main() -> Result<(), Error> {
     }
 }
 
-fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>) -> Result<(), Error> {
+fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
     println!("handling client ");
     let store = Arc::clone(store);
     tokio::spawn(async move {
@@ -62,10 +62,33 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>) -> Result<(),
                             "SET" => {
                                 let key = bulk2.to_string();
                                 let value = bulk3.to_string();
-                                store.set(key, value);
-                                let res = PacketTypes::SimpleString("OK".to_string());
-                                let ok = res.to_string();
-                                stream.write_all(ok.as_bytes()).await.unwrap();
+
+                                let cmd2 = packets.get(3);
+                                let cmd3 = packets.get(4);
+
+                                match (cmd2, cmd3) {
+                                    (Some(PacketTypes::BulkString(bulk4)), Some(PacketTypes::BulkString(bulk5))) => {
+                                      let commande = bulk4.as_str().to_uppercase(); 
+                                      match commande.as_str() {
+                                        "PX" => {
+                                          let expire_time = bulk5.as_str().parse::<u64>().unwrap();
+                                          store.set_with_expiry(key, value, expire_time);
+                                          let res = PacketTypes::SimpleString("OK".to_string());
+                                          let ok = res.to_string();
+                                          stream.write_all(ok.as_bytes()).await.unwrap();
+                                        },
+                                        _ => {
+                                          println!("unsupported sub commande {} for SET", commande);
+                                        }
+                                      }
+                                    },
+                                    _ => {
+                                        store.set(key, value);
+                                        let res = PacketTypes::SimpleString("OK".to_string());
+                                        let ok = res.to_string();
+                                        stream.write_all(ok.as_bytes()).await.unwrap();
+                                    }
+                                }
                             },
                             _ => {
                                 println!("unsupported command {}", commande);
@@ -87,7 +110,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>) -> Result<(),
                                   let key = bulk2.to_string();
                                   let value = store.get(key);
                                   if let Some(value) = value {
-                                    let res = PacketTypes::BulkString(value);
+                                    let res = PacketTypes::BulkString(value.value);
                                     let res = res.to_string();
                                     stream.write_all(res.as_bytes()).await.unwrap();
                                   }else {
@@ -125,5 +148,4 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>) -> Result<(),
             }
         }
     });
-    return Ok(());
 }
