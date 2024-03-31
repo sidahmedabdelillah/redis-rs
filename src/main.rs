@@ -3,18 +3,26 @@ use std::sync::Arc;
 use anyhow::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
+use clap::Parser;
 
 mod decoder;
 mod store;
 
 use decoder::PacketTypes;
 
-#[tokio::main]
-async fn main() -> Result<(), Error> {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Name of the person to greet
+    #[arg(short, long)]
+    port: Option<String>,
+}
 
-    let addr = "127.0.0.1:6379".to_string();
+#[tokio::main]
+async fn main() -> Result<(), Error> {    
+    let args = Args::parse();
+    let port = args.port.unwrap_or("6379".to_string());
+    let addr = format!("127.0.0.1:{}", port);
     let store = Arc::new(store::Store::new());
 
     // Uncomment this block to pass the first stage
