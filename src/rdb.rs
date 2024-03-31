@@ -1,6 +1,8 @@
-use base64::prelude::*;
-pub const BASE64_RDB_EMPTY: &str = "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==";
+use hex_literal::hex;
 
+const EMPTY_RDB_FILE: [u8; 88] = 
+    hex!("524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2")
+;
 pub fn get_rdb_bytes() -> Vec<u8> {
-    BASE64_STANDARD.decode(BASE64_RDB_EMPTY.as_bytes()).unwrap()
+    EMPTY_RDB_FILE
 }
