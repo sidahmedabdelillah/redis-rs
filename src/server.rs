@@ -66,6 +66,8 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
     }
 }
 
+
+
 fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>) {
     let store = Arc::clone(store);
     let server = Arc::clone(server);
@@ -118,10 +120,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                                         bulk5.as_str().parse::<u64>().unwrap();
                                                     println!("debug: setting key {} with value {} and expiry {}", key, value,expire_time);
                                                     store.set_with_expiry(key, value, expire_time);
-                                                    let res =
-                                                        PacketTypes::SimpleString("OK".to_string());
-                                                    let ok = res.to_string();
-                                                    stream.write_all(ok.as_bytes()).await.unwrap();
+                                                    send_ok(&mut stream).await.unwrap();
                                                 }
                                                 _ => {
                                                     println!(
@@ -137,11 +136,12 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                                 key, value
                                             );
                                             store.set(key, value);
-                                            let res = PacketTypes::SimpleString("OK".to_string());
-                                            let ok = res.to_string();
-                                            stream.write_all(ok.as_bytes()).await.unwrap();
+                                            send_ok(&mut stream).await.unwrap();
                                         }
                                     }
+                                },
+                                "REPLCONF" => {
+                                    send_ok(&mut stream).await.unwrap();
                                 }
                                 _ => {
                                     println!("unsupported command {}", commande);
@@ -156,31 +156,22 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                             let command = bulk1.as_str();
                             match command.to_uppercase().as_str() {
                                 "ECHO" => {
-                                    let res = PacketTypes::BulkString(bulk2.to_string());
-                                    let echo = res.to_string();
-                                    stream.write_all(echo.as_bytes()).await.unwrap();
+                                    send_bulk_string(&mut stream, &bulk2.to_string()).await.unwrap();
                                 }
                                 "GET" => {
                                     let key = bulk2.to_string();
-                                    println!("debug: handeling get for key {}", key);
                                     let value = store.get(key);
                                     if let Some(value) = value {
-                                        let res = PacketTypes::BulkString(value.value);
-                                        let res = res.to_string();
-                                        stream.write_all(res.as_bytes()).await.unwrap();
+                                        send_bulk_string(&mut stream, &value.value).await.unwrap();
                                     } else {
-                                        let res = PacketTypes::NullBulkString;
-                                        let res = res.to_string();
-                                        stream.write_all(res.as_bytes()).await.unwrap();
+                                        send_null_string(&mut stream).await.unwrap();
                                     }
                                 }
                                 "INFO" => {
                                     let sub = bulk2.as_str();
                                     match sub {
                                         "replication" => {
-                                            let packet = PacketTypes::new_replication_info(&server);
-                                            let info = packet.to_string();
-                                            stream.write_all(info.as_bytes()).await.unwrap();
+                                            send_replication_info(&mut stream, &server).await.unwrap();
                                         }
                                         _ => {
                                             println!(
@@ -199,9 +190,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                             let command = bulk1.as_str();
                             match command.to_uppercase().as_str() {
                                 "PING" => {
-                                    let res = PacketTypes::SimpleString("PONG".to_string());
-                                    let pong = res.to_string();
-                                    stream.write_all(pong.as_bytes()).await.unwrap();
+                                    send_pong(&mut stream).await.unwrap();
                                 }
                                 _ => {
                                     println!("unsupported command {}", command);
@@ -219,4 +208,39 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
             }
         }
     });
+}
+
+async fn send_ok(stream: &mut TcpStream) -> Result<(), Error> {
+    let res = PacketTypes::SimpleString("OK".to_string());
+    let ok = res.to_string();
+    stream.write_all(ok.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn send_pong(stream: &mut TcpStream) -> Result<(), Error> {
+    let res = PacketTypes::SimpleString("PONG".to_string());
+    let pong = res.to_string();
+    stream.write_all(pong.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn send_bulk_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
+    let res = PacketTypes::BulkString(value.to_string());
+    let res = res.to_string();
+    stream.write_all(res.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn send_null_string(stream: &mut TcpStream) -> Result<(), Error> {
+    let res = PacketTypes::NullBulkString;
+    let res = res.to_string();
+    stream.write_all(res.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn send_replication_info(stream: &mut TcpStream, server: &Server) -> Result<(), Error> {
+    let packet = PacketTypes::new_replication_info(server);
+    let info = packet.to_string();
+    stream.write_all(info.as_bytes()).await.unwrap();
+    Ok(())
 }
