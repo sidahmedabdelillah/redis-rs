@@ -18,11 +18,37 @@ struct Args {
     port: Option<String>,
 }
 
+pub enum ServerRole {
+  Master,
+  Slave
+}
+
+impl ServerRole {
+    pub fn to_string(&self) -> String {
+      match self {
+        ServerRole::Master => "master".to_string(),
+        ServerRole::Slave => "slave".to_string()
+      }
+    }
+}
+
+pub struct Server {
+  pub role: ServerRole,
+  pub port: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {    
     let args = Args::parse();
     let port = args.port.unwrap_or("6379".to_string());
     let addr = format!("127.0.0.1:{}", port);
+
+    let server = Server {
+      role: ServerRole::Master,
+      port: port
+    };
+
+    let server = Arc::new(server);
     let store = Arc::new(store::Store::new());
 
     // Uncomment this block to pass the first stage
@@ -31,12 +57,14 @@ async fn main() -> Result<(), Error> {
 
     loop {
         let (socket, _) = listener.accept().await?;
-        handle_client(socket, &store);
+        handle_client(socket, &store, &server);
     }
 }
 
-fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
+fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>, server: &Arc<Server>)  {
     let store = Arc::clone(store);
+    let server = Arc::clone(server);
+
     tokio::spawn(async move {
         let mut buf = [0; 512];
         // In a loop, read data from the socket and write the data back.
@@ -127,6 +155,19 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
                                     let res = PacketTypes::NullBulkString;
                                     let res = res.to_string();
                                     stream.write_all(res.as_bytes()).await.unwrap();
+                                  }
+                                },
+                                "INFO" => {
+                                  let sub = bulk2.as_str();
+                                  match sub {
+                                    "replication" => {
+                                      let packet = PacketTypes::new_replication_info(&server);
+                                      let info = packet.to_string();
+                                      stream.write_all(info.as_bytes()).await.unwrap();
+                                    },
+                                    _ => {
+                                      println!("unsupported sub command for INFO : {}", command);
+                                  }
                                   }
                                 }
                                 _ => {

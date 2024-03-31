@@ -1,5 +1,7 @@
 use anyhow::Error;
 
+use crate::Server;
+
 #[derive(Debug)]
 pub enum PacketTypes {
     SimpleString(String),
@@ -15,6 +17,12 @@ pub enum ComandTypes {
 }
 
 impl PacketTypes {
+    pub fn new_replication_info(server: &Server) -> Self{
+        let text = format!("role:{}\n", server.role.to_string());
+        let packet = PacketTypes::SimpleString(text);
+        return packet;
+    }
+
     pub fn parse(buffer: &[u8]) -> Result<(Self, usize), Error> {
         match buffer[0] as char {
             '+' => {
