@@ -21,7 +21,7 @@ struct Args {
     host: Option<String>,
 
     #[clap(short, long, value_delimiter = ' ', num_args = 2)]
-    pub replicatof: Option<Vec<i32>>,
+    pub replicaof: Option<Vec<i32>>,
 }
 
 pub enum ServerRole {
