@@ -64,6 +64,16 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     ])
     .await;
 
+    let _ = client.stream.read(&mut handshake_buf).await.unwrap();
+    println!("Debug: Sending PSYNC  ");
+    client
+    .send_commands(vec![
+        "PSYNC".to_string(),
+        "?".to_string(),
+        "-1".to_string(),
+    ])
+    .await;
+
 
     return Ok(());
 }
