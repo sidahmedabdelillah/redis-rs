@@ -27,6 +27,9 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     println!("Debug: Sending {}", str);
     stream.write_all(str.as_bytes()).await.unwrap();
 
+    stream.shutdown().await.unwrap();
+
+    let mut stream = TcpStream::connect(&addr).await.unwrap();
     let replconf = PacketTypes::BulkString("REPLCONF".to_string());
     let listening_port = PacketTypes::BulkString("listening-port".to_string());
     let port = PacketTypes::BulkString(server.port.clone());
@@ -35,5 +38,7 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     let commands = PacketTypes::Array(commands);
     let str = commands.to_string();
     stream.write_all(str.as_bytes()).await.unwrap();
+
+
     return Ok(());
 }
