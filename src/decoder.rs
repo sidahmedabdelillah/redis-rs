@@ -60,9 +60,6 @@ impl PacketTypes {
                 let mut result = String::from("$");
                 result.push_str(&rdb.len().to_string());
                 result.push_str("\r\n");
-                for byte in rdb {
-                    result.push_str(&format!("{:02x}", byte));
-                }
                 result
             }
         }
