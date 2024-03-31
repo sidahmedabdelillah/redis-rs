@@ -7,15 +7,15 @@ async fn main()-> Result<(),Error> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
-    let addr =  "127.0.0.1:8080".to_string();
+    let addr =  "127.0.0.1:6379".to_string();
 
     // Uncomment this block to pass the first stage
     //
     let listener = TcpListener::bind(&addr).await?;
 
     loop {
-        let (mut socket, _) = listener.accept().await?;
-        
+        let (socket, _) = listener.accept().await?;
+        handle_client(socket);
     }
 }
 
