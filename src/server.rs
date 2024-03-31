@@ -8,7 +8,7 @@ use tokio::net::{TcpListener, TcpStream};
 use crate::decoder::{self, PacketTypes};
 use crate::store::Store;
 
-# [derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum ServerRole {
     Master,
     Slave,
@@ -65,8 +65,6 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
         handle_client(socket, &store, &server);
     }
 }
-
-
 
 fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>) {
     let store = Arc::clone(store);
@@ -139,9 +137,17 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                             send_ok(&mut stream).await.unwrap();
                                         }
                                     }
-                                },
+                                }
                                 "REPLCONF" => {
                                     send_ok(&mut stream).await.unwrap();
+                                }
+                                "PSYNC" => {
+                                    send_simple_string(
+                                        &mut stream,
+                                        &format!("+FULLRESYNC {} 0", server.replid).to_string(),
+                                    )
+                                    .await
+                                    .unwrap();
                                 }
                                 _ => {
                                     println!("unsupported command {}", commande);
@@ -156,7 +162,9 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                             let command = bulk1.as_str();
                             match command.to_uppercase().as_str() {
                                 "ECHO" => {
-                                    send_bulk_string(&mut stream, &bulk2.to_string()).await.unwrap();
+                                    send_bulk_string(&mut stream, &bulk2.to_string())
+                                        .await
+                                        .unwrap();
                                 }
                                 "GET" => {
                                     let key = bulk2.to_string();
@@ -171,7 +179,9 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     let sub = bulk2.as_str();
                                     match sub {
                                         "replication" => {
-                                            send_replication_info(&mut stream, &server).await.unwrap();
+                                            send_replication_info(&mut stream, &server)
+                                                .await
+                                                .unwrap();
                                         }
                                         _ => {
                                             println!(
@@ -242,5 +252,12 @@ async fn send_replication_info(stream: &mut TcpStream, server: &Server) -> Resul
     let packet = PacketTypes::new_replication_info(server);
     let info = packet.to_string();
     stream.write_all(info.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
+    let res = PacketTypes::SimpleString(value.to_string());
+    let res = res.to_string();
+    stream.write_all(res.as_bytes()).await.unwrap();
     Ok(())
 }
