@@ -59,7 +59,7 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     client
     .send_commands(vec![
         "replconf".to_string(),
-        "capa ".to_string(),
+        "capa".to_string(),
         "psync2 ".to_string(),
     ])
     .await;
