@@ -6,7 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::decoder::{self, PacketTypes};
-use crate::rdb::HEX_RDB_EMPTY;
+use crate::rdb::get_rdb_bytes;
 use crate::store::Store;
 
 #[derive(Debug, PartialEq)]
@@ -265,7 +265,7 @@ async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<()
 }
 
 async fn send_empty_rdb(stream: &mut TcpStream) -> Result<(), Error> {
-    let res = PacketTypes::RDB(HEX_RDB_EMPTY.as_bytes().to_vec());
+    let res = PacketTypes::RDB(get_rdb_bytes());
     let res = res.to_string();
     stream.write_all(res.as_bytes()).await.unwrap();
     Ok(())
