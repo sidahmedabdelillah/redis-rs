@@ -1,4 +1,4 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use std::{collections::HashMap, sync::Mutex};
 
 pub struct Store {
@@ -50,7 +50,7 @@ impl Store {
             let now = SystemTime::now();
             let diff = now.duration_since(entery.set_time).unwrap().as_millis();
             println!("debug: diff {} expire_time {}", diff, entery.expire_time);
-            if (diff < entery.expire_time as u128) {
+            if diff < entery.expire_time as u128 {
                 return Some(entery.clone());
             } else {
                 return None;
@@ -58,10 +58,5 @@ impl Store {
         } else {
             return None;
         }
-    }
-
-    pub fn del(&self, key: String) {
-        let mut db = self.db.lock().unwrap();
-        db.remove(&key);
     }
 }
