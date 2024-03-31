@@ -1,9 +1,9 @@
-use std::{sync::Arc, vec};
+use std::{vec};
 
 use anyhow::Error;
-use clap::Command;
+
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncWriteExt},
     net::TcpStream,
 };
 
@@ -27,5 +27,13 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     println!("Debug: Sending {}", str);
     stream.write_all(str.as_bytes()).await.unwrap();
 
+    let replconf = PacketTypes::BulkString("REPLCONF".to_string());
+    let listening_port = PacketTypes::BulkString("listening-port".to_string());
+    let port = PacketTypes::BulkString(server.port.clone());
+
+    let commands: Vec<PacketTypes> = vec![replconf, listening_port, port];
+    let commands = PacketTypes::Array(commands);
+    let str = commands.to_string();
+    stream.write_all(str.as_bytes()).await.unwrap();
     return Ok(());
 }
