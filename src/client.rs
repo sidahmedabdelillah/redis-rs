@@ -43,7 +43,7 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     println!("Debug: Sending ping");
     client.send_commands(vec!["ping".to_string()]).await;
 
-    let _ = client.stream.read(&mut handshake_buf);
+    let _ = client.stream.read(&mut handshake_buf).await.unwrap();
 
     println!("Debug: Sending replconf");
     client
