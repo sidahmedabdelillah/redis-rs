@@ -1,4 +1,4 @@
-use std::{io::Write, net::TcpListener, net::TcpStream};
+use std::{io::{Read, Write}, net::{TcpListener, TcpStream}};
 
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -22,8 +22,14 @@ fn main() {
 
 
 fn handle_client(mut stream: TcpStream) {
+    let mut buf = [0; 512];
+    let pong = "+PONG\r\n";
+
     loop {
-        let pong = "+PONG\r\n";
+        let bytes_read = stream.read(&mut buf).expect("Failed to read from client");
+        if bytes_read == 0 {
+            return;
+        }
         stream.write_all(pong.as_bytes()).unwrap();
     }
 }
