@@ -52,7 +52,7 @@ async fn main() -> Result<(), Error> {
     let host = args.host.unwrap_or("127.0.0.1".to_string());
     let addr = format!("{}:{}", host, port);
 
-    let server = match args.replicatof {
+    let server = match args.replicaof {
         Some(replicatof) => {
             if replicatof.len() != 2 {
                 panic!("replicatof must have 2 arguments");
