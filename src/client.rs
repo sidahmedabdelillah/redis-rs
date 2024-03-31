@@ -45,6 +45,7 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
 
     let _ = client.stream.read(&mut handshake_buf);
 
+    println!("Debug: Sending replconf");
     client
         .send_commands(vec![
             "replconf".to_string(),
