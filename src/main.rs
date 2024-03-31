@@ -10,6 +10,7 @@ mod client;
 mod decoder;
 mod server;
 mod store;
+mod rdb;
 
 
 

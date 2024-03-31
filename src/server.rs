@@ -6,6 +6,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
 use crate::decoder::{self, PacketTypes};
+use crate::rdb::HEX_RDB_EMPTY;
 use crate::store::Store;
 
 #[derive(Debug, PartialEq)]
@@ -148,6 +149,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     )
                                     .await
                                     .unwrap();
+                                    send_empty_rdb(&mut stream).await.unwrap();
                                 }
                                 _ => {
                                     println!("unsupported command {}", commande);
@@ -257,6 +259,13 @@ async fn send_replication_info(stream: &mut TcpStream, server: &Server) -> Resul
 
 async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
     let res = PacketTypes::SimpleString(value.to_string());
+    let res = res.to_string();
+    stream.write_all(res.as_bytes()).await.unwrap();
+    Ok(())
+}
+
+async fn send_empty_rdb(stream: &mut TcpStream) -> Result<(), Error> {
+    let res = PacketTypes::RDB(HEX_RDB_EMPTY.as_bytes().to_vec());
     let res = res.to_string();
     stream.write_all(res.as_bytes()).await.unwrap();
     Ok(())

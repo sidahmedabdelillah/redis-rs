@@ -8,6 +8,7 @@ pub enum PacketTypes {
     BulkString(String),
     NullBulkString,
     Array(Vec<PacketTypes>),
+    RDB(Vec<u8>),
 }
 
 impl PacketTypes {
@@ -55,6 +56,15 @@ impl PacketTypes {
                 result
             },
             PacketTypes::NullBulkString => "$-1\r\n".to_string(),
+            PacketTypes::RDB(rdb) => {
+                let mut result = String::from("$");
+                result.push_str(&rdb.len().to_string());
+                result.push_str("\r\n");
+                for byte in rdb {
+                    result.push_str(&format!("{:02x}", byte));
+                }
+                result
+            }
         }
     }
 }
