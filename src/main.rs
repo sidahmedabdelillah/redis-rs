@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Error;
+use clap::Parser;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use clap::Parser;
 
 mod decoder;
 mod store;
@@ -16,36 +16,60 @@ struct Args {
     /// Name of the person to greet
     #[arg(short, long)]
     port: Option<String>,
+
+    #[arg(long)]
+    host: Option<String>,
+
+    #[clap(short, long, value_delimiter = ' ', num_args = 2)]
+    pub replicatof: Option<Vec<i32>>,
 }
 
 pub enum ServerRole {
-  Master,
-  Slave
+    Master,
+    Slave,
 }
 
 impl ServerRole {
     pub fn to_string(&self) -> String {
-      match self {
-        ServerRole::Master => "master".to_string(),
-        ServerRole::Slave => "slave".to_string()
-      }
+        match self {
+            ServerRole::Master => "master".to_string(),
+            ServerRole::Slave => "slave".to_string(),
+        }
     }
 }
 
 pub struct Server {
-  pub role: ServerRole,
-  pub port: String,
+    pub role: ServerRole,
+    pub port: String,
+    pub host: String,
+    pub replicat_of: Option<(String, String)>,
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {    
+async fn main() -> Result<(), Error> {
     let args = Args::parse();
     let port = args.port.unwrap_or("6379".to_string());
-    let addr = format!("127.0.0.1:{}", port);
+    let host = args.host.unwrap_or("127.0.0.1".to_string());
+    let addr = format!("{}:{}", host, port);
 
-    let server = Server {
-      role: ServerRole::Master,
-      port: port
+    let server = match args.replicatof {
+        Some(replicatof) => {
+            if replicatof.len() != 2 {
+                panic!("replicatof must have 2 arguments");
+            }
+            Server {
+                role: ServerRole::Slave,
+                port: port,
+                host: host,
+                replicat_of: Some((replicatof[0].to_string(), replicatof[1].to_string())),
+            }
+        }
+        None => Server {
+            role: ServerRole::Master,
+            port: port,
+            host: host,
+            replicat_of: None,
+        },
     };
 
     let server = Arc::new(server);
@@ -61,7 +85,7 @@ async fn main() -> Result<(), Error> {
     }
 }
 
-fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>, server: &Arc<Server>)  {
+fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>, server: &Arc<Server>) {
     let store = Arc::clone(store);
     let server = Arc::clone(server);
 
@@ -92,45 +116,57 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>, server: &Arc<
                             Some(PacketTypes::BulkString(bulk2)),
                             Some(PacketTypes::BulkString(bulk3)),
                         ) => {
-                          let commande = bulk1.as_str().to_uppercase(); 
-                          match commande.as_str() {
-                            "SET" => {
-                                let key = bulk2.to_string();
-                                let value = bulk3.to_string();
+                            let commande = bulk1.as_str().to_uppercase();
+                            match commande.as_str() {
+                                "SET" => {
+                                    let key = bulk2.to_string();
+                                    let value = bulk3.to_string();
 
-                                let cmd2 = packets.get(3);
-                                let cmd3 = packets.get(4);
+                                    let cmd2 = packets.get(3);
+                                    let cmd3 = packets.get(4);
 
-                                match (cmd2, cmd3) {
-                                    (Some(PacketTypes::BulkString(bulk4)), Some(PacketTypes::BulkString(bulk5))) => {
-                                      let commande = bulk4.as_str().to_uppercase(); 
-                                      match commande.as_str() {
-                                        "PX" => {
-                                          let expire_time = bulk5.as_str().parse::<u64>().unwrap();
-                                          println!("debug: setting key {} with value {} and expiry {}", key, value,expire_time);
-                                          store.set_with_expiry(key, value, expire_time);
-                                          let res = PacketTypes::SimpleString("OK".to_string());
-                                          let ok = res.to_string();
-                                          stream.write_all(ok.as_bytes()).await.unwrap();
-                                        },
-                                        _ => {
-                                          println!("unsupported sub commande {} for SET", commande);
+                                    match (cmd2, cmd3) {
+                                        (
+                                            Some(PacketTypes::BulkString(bulk4)),
+                                            Some(PacketTypes::BulkString(bulk5)),
+                                        ) => {
+                                            let commande = bulk4.as_str().to_uppercase();
+                                            match commande.as_str() {
+                                                "PX" => {
+                                                    let expire_time =
+                                                        bulk5.as_str().parse::<u64>().unwrap();
+                                                    println!("debug: setting key {} with value {} and expiry {}", key, value,expire_time);
+                                                    store.set_with_expiry(key, value, expire_time);
+                                                    let res =
+                                                        PacketTypes::SimpleString("OK".to_string());
+                                                    let ok = res.to_string();
+                                                    stream.write_all(ok.as_bytes()).await.unwrap();
+                                                }
+                                                _ => {
+                                                    println!(
+                                                        "unsupported sub commande {} for SET",
+                                                        commande
+                                                    );
+                                                }
+                                            }
                                         }
-                                      }
-                                    },
-                                    _ => {
-                                        println!("debug: setting key {} with value {}", key, value);
-                                        store.set(key, value);
-                                        let res = PacketTypes::SimpleString("OK".to_string());
-                                        let ok = res.to_string();
-                                        stream.write_all(ok.as_bytes()).await.unwrap();
+                                        _ => {
+                                            println!(
+                                                "debug: setting key {} with value {}",
+                                                key, value
+                                            );
+                                            store.set(key, value);
+                                            let res = PacketTypes::SimpleString("OK".to_string());
+                                            let ok = res.to_string();
+                                            stream.write_all(ok.as_bytes()).await.unwrap();
+                                        }
                                     }
                                 }
-                            },
-                            _ => {
-                                println!("unsupported command {}", commande);
+                                _ => {
+                                    println!("unsupported command {}", commande);
+                                }
                             }
-                        }},
+                        }
                         (
                             Some(PacketTypes::BulkString(bulk1)),
                             Some(PacketTypes::BulkString(bulk2)),
@@ -142,33 +178,36 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>, server: &Arc<
                                     let res = PacketTypes::BulkString(bulk2.to_string());
                                     let echo = res.to_string();
                                     stream.write_all(echo.as_bytes()).await.unwrap();
-                                },
+                                }
                                 "GET" => {
-                                  let key = bulk2.to_string();
-                                  println!("debug: handeling get for key {}", key);
-                                  let value = store.get(key);
-                                  if let Some(value) = value {
-                                    let res = PacketTypes::BulkString(value.value);
-                                    let res = res.to_string();
-                                    stream.write_all(res.as_bytes()).await.unwrap();
-                                  }else {
-                                    let res = PacketTypes::NullBulkString;
-                                    let res = res.to_string();
-                                    stream.write_all(res.as_bytes()).await.unwrap();
-                                  }
-                                },
+                                    let key = bulk2.to_string();
+                                    println!("debug: handeling get for key {}", key);
+                                    let value = store.get(key);
+                                    if let Some(value) = value {
+                                        let res = PacketTypes::BulkString(value.value);
+                                        let res = res.to_string();
+                                        stream.write_all(res.as_bytes()).await.unwrap();
+                                    } else {
+                                        let res = PacketTypes::NullBulkString;
+                                        let res = res.to_string();
+                                        stream.write_all(res.as_bytes()).await.unwrap();
+                                    }
+                                }
                                 "INFO" => {
-                                  let sub = bulk2.as_str();
-                                  match sub {
-                                    "replication" => {
-                                      let packet = PacketTypes::new_replication_info(&server);
-                                      let info = packet.to_string();
-                                      stream.write_all(info.as_bytes()).await.unwrap();
-                                    },
-                                    _ => {
-                                      println!("unsupported sub command for INFO : {}", command);
-                                  }
-                                  }
+                                    let sub = bulk2.as_str();
+                                    match sub {
+                                        "replication" => {
+                                            let packet = PacketTypes::new_replication_info(&server);
+                                            let info = packet.to_string();
+                                            stream.write_all(info.as_bytes()).await.unwrap();
+                                        }
+                                        _ => {
+                                            println!(
+                                                "unsupported sub command for INFO : {}",
+                                                command
+                                            );
+                                        }
+                                    }
                                 }
                                 _ => {
                                     println!("unsupported command {}", command);
