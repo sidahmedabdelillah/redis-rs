@@ -265,7 +265,7 @@ async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<()
 }
 
 async fn send_empty_rdb(stream: &mut TcpStream) -> Result<(), Error> {
-    let res = PacketTypes::RDB(get_rdb_bytes());
+    let res = PacketTypes::RDB(get_rdb_bytes().to_vec());
     let res = res.to_string();
     stream.write_all(res.as_bytes()).await.unwrap();
     Ok(())
