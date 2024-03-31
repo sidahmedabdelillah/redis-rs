@@ -10,7 +10,6 @@ use tokio::{
 use crate::{decoder::PacketTypes, server::Server};
 
 struct Client<'a> {
-    server: &'a Server,
     stream: &'a mut TcpStream,
 }
 
@@ -35,7 +34,6 @@ pub async fn init_client(server: &Server) -> Result<(), Error> {
     let mut stream = TcpStream::connect(&addr).await.unwrap();
 
     let mut client = Client {
-        server: &server,
         stream: &mut stream,
     };
 
