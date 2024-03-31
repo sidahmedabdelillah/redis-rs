@@ -15,8 +15,8 @@ impl PacketTypes {
         let mut text = format!("role:{}\n", server.role.to_string());
         if let Some(master_replid) = &server.master_replid {
             text.push_str(&format!("master_replid:{}\n", master_replid));
-            text.push_str(format!("master_repl_offset:{}\n", '0').as_str());
         }
+        text.push_str(format!("master_repl_offset:{}\n", '0').as_str());
         let packet = PacketTypes::SimpleString(text);
         return packet;
     }
