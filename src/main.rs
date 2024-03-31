@@ -28,7 +28,6 @@ async fn main() -> Result<(), Error> {
 }
 
 fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
-    println!("handling client ");
     let store = Arc::clone(store);
     tokio::spawn(async move {
         let mut buf = [0; 512];
@@ -72,6 +71,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
                                       match commande.as_str() {
                                         "PX" => {
                                           let expire_time = bulk5.as_str().parse::<u64>().unwrap();
+                                          println!("debug: setting key {} with value {} and expiry {}", key, value,expire_time);
                                           store.set_with_expiry(key, value, expire_time);
                                           let res = PacketTypes::SimpleString("OK".to_string());
                                           let ok = res.to_string();
@@ -83,6 +83,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
                                       }
                                     },
                                     _ => {
+                                        println!("debug: setting key {} with value {}", key, value);
                                         store.set(key, value);
                                         let res = PacketTypes::SimpleString("OK".to_string());
                                         let ok = res.to_string();
@@ -108,6 +109,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<store::Store>)  {
                                 },
                                 "GET" => {
                                   let key = bulk2.to_string();
+                                  println!("debug: handeling get for key {}", key);
                                   let value = store.get(key);
                                   if let Some(value) = value {
                                     let res = PacketTypes::BulkString(value.value);

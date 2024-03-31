@@ -44,15 +44,16 @@ impl Store {
     pub fn get(&self, key: String) -> Option<Entery> {
         let db = self.db.lock().unwrap();
         if let Some(entery) = db.get(&key) {
-            if (entery.expire_time == 0) {
+            if entery.expire_time == 0 {
                 return Some(entery.clone());
             }
             let now = SystemTime::now();
             let diff = now.duration_since(entery.set_time).unwrap().as_millis();
+            println!("debug: diff {} expire_time {}", diff, entery.expire_time);
             if (diff < entery.expire_time as u128) {
                 return Some(entery.clone());
             } else {
-                return Some(entery.clone());
+                return None;
             }
         } else {
             return None;
