@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::{Rc, Weak};
+use std::sync::{Arc, Mutex};
 
 use anyhow::Error;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -24,6 +27,8 @@ impl ServerRole {
     }
 }
 
+type PendingUpdates = Arc<Mutex<HashMap<String, HashSet<String>>>>;
+
 pub struct Server {
     pub role: ServerRole,
     pub port: String,
@@ -31,6 +36,8 @@ pub struct Server {
     pub replicat_of: Option<(String, String)>,
     pub replid: String,
     pub master_replid: Option<String>,
+    pub slaves: Arc<Mutex<Vec<String>>>,
+    pub pending_updates: PendingUpdates,
 }
 
 impl Server {
@@ -46,6 +53,8 @@ impl Server {
             .take(40)
             .map(char::from)
             .collect();
+        let slaves = Arc::new(Mutex::new(Vec::new()));
+        let pending_updates = Arc::new(Mutex::new(HashMap::new()));
         Server {
             role,
             port,
@@ -53,6 +62,8 @@ impl Server {
             replicat_of,
             replid,
             master_replid,
+            slaves,
+            pending_updates,
         }
     }
 }
@@ -75,6 +86,8 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
         let mut buf = [0; 512];
         // In a loop, read data from the socket and write the data back.
         loop {
+            // let mut pending_updates_map = Arc::clone(&server.pending_updates);
+            // apply_update(pending_updates_map, &mut stream).await;
             let n = stream
                 .read(&mut buf)
                 .await
@@ -101,6 +114,10 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                             let commande = bulk1.as_str().to_uppercase();
                             match commande.as_str() {
                                 "SET" => {
+                                    // raw command string from buf
+                                    let raw_command =
+                                        std::str::from_utf8(&buf[..n]).unwrap().to_string();
+                                    add_pending_update(&server, &raw_command).await;
                                     let key = bulk2.to_string();
                                     let value = bulk3.to_string();
 
@@ -150,6 +167,11 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     .await
                                     .unwrap();
                                     send_empty_rdb(&mut stream).await.unwrap();
+
+                                    let stream_id = stream.peer_addr().unwrap().to_string();
+                                    println!("Debug: adding slave with id {}", stream_id);
+                                    let mut slaves = server.slaves.lock().unwrap();
+                                    slaves.push(stream_id);
                                 }
                                 _ => {
                                     println!("unsupported command {}", commande);
@@ -272,4 +294,40 @@ async fn send_empty_rdb(stream: &mut TcpStream) -> Result<(), Error> {
         .await
         .unwrap();
     Ok(())
+}
+
+async fn add_pending_update(server: &Server, upadte: &String) {
+    println!("Debug: adding pending update: {}", upadte);
+    let mut pending_updates = server.pending_updates.lock().unwrap();
+    let hash_set_elements: HashSet<String> = server
+        .slaves
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|f| f.clone())
+        .collect();
+    pending_updates.insert(upadte.clone(), hash_set_elements);
+}
+
+async fn apply_update(
+    pending_updates_map: Arc<Mutex<HashMap<String, HashSet<String>>>>,
+    stream: &mut TcpStream,
+) {
+    let mut pending_updates_map = pending_updates_map.lock().unwrap();
+    let pending_updates = pending_updates_map
+        .keys()
+        .map(|f| f.clone())
+        .collect::<Vec<String>>();
+    let stream_id = stream.peer_addr().unwrap().to_string();
+    for update in pending_updates {
+        let mut slaves = pending_updates_map.get_mut(&update).unwrap();
+        for slave in slaves.clone().into_iter() {
+            if slave != stream_id {
+                continue;
+            }
+            let update = update.clone();
+            stream.write_all(update.as_bytes()).await.unwrap();
+        }
+        slaves.remove(&stream_id);
+    }
 }
