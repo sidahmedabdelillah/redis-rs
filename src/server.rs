@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::{Rc, Weak};
-use std::sync::{Arc, Mutex};
+
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 use anyhow::Error;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
@@ -27,8 +28,6 @@ impl ServerRole {
     }
 }
 
-type PendingUpdates = Arc<Mutex<HashMap<String, HashSet<String>>>>;
-
 pub struct Server {
     pub role: ServerRole,
     pub port: String,
@@ -37,7 +36,7 @@ pub struct Server {
     pub replid: String,
     pub master_replid: Option<String>,
     pub slaves: Arc<Mutex<Vec<String>>>,
-    pub pending_updates: PendingUpdates,
+    pub pending_updates: Arc<Mutex<HashSet<(String, String)>>>,
 }
 
 impl Server {
@@ -54,7 +53,8 @@ impl Server {
             .map(char::from)
             .collect();
         let slaves = Arc::new(Mutex::new(Vec::new()));
-        let pending_updates = Arc::new(Mutex::new(HashMap::new()));
+        let pending_updates = Arc::new(Mutex::new(HashSet::<(String, String)>::new()));
+        let shared_pending_updates = Arc::clone(&pending_updates);
         Server {
             role,
             port,
@@ -63,8 +63,45 @@ impl Server {
             replid,
             master_replid,
             slaves,
-            pending_updates,
+            pending_updates: shared_pending_updates,
         }
+    }
+
+    pub async fn apply_pending_update(&self, stream: &mut TcpStream) {
+        let server = self;
+        let mut pending_updates = server.pending_updates.lock().await;
+        let updates = pending_updates.clone();
+        for (slave, update) in updates.iter() {
+            stream.write_all(update.as_bytes()).await.unwrap();
+            pending_updates.remove(&(slave.to_string(), update.to_string()));
+        }
+    }
+
+    pub async fn add_pending_update(&self, update: &String) {
+        print!("Debug: adding pending update {}", update);
+        let server = &self;
+        let mut pending_updates = server.pending_updates.lock().await;
+        let servers = server.slaves.lock().await;
+        for slave in servers.iter() {
+            pending_updates.insert((slave.to_string(), update.to_string()));
+        }
+    }
+
+    pub async fn send_empty_rdb(&self, stream: &mut TcpStream) -> Result<(), Error> {
+        let res = PacketTypes::RDB(get_rdb_bytes().to_vec());
+        let res = res.to_string();
+        stream
+            .write_all([res.as_bytes(), &EMPTY_RDB_FILE].concat().as_slice())
+            .await
+            .unwrap();
+        Ok(())
+    }
+
+    pub async fn send_replication_info(&self, stream: &mut TcpStream) -> Result<(), Error> {
+        let packet = PacketTypes::new_replication_info(self);
+        let info = packet.to_string();
+        stream.write_all(info.as_bytes()).await.unwrap();
+        Ok(())
     }
 }
 
@@ -80,14 +117,12 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
 
 fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>) {
     let store = Arc::clone(store);
-    let server = Arc::clone(server);
+    let server = Arc::clone(&server);
 
     tokio::spawn(async move {
         let mut buf = [0; 512];
         // In a loop, read data from the socket and write the data back.
         loop {
-            // let mut pending_updates_map = Arc::clone(&server.pending_updates);
-            // apply_update(pending_updates_map, &mut stream).await;
             let n = stream
                 .read(&mut buf)
                 .await
@@ -117,7 +152,10 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     // raw command string from buf
                                     let raw_command =
                                         std::str::from_utf8(&buf[..n]).unwrap().to_string();
-                                    add_pending_update(&server, &raw_command).await;
+                                    // add to pending updates
+                                    let server = Arc::clone(&server);
+                                    server.add_pending_update(&raw_command).await;
+
                                     let key = bulk2.to_string();
                                     let value = bulk3.to_string();
 
@@ -166,11 +204,12 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     )
                                     .await
                                     .unwrap();
-                                    send_empty_rdb(&mut stream).await.unwrap();
+                                    let server = Arc::clone(&server);
+                                    server.send_empty_rdb(&mut stream).await.unwrap();
 
                                     let stream_id = stream.peer_addr().unwrap().to_string();
                                     println!("Debug: adding slave with id {}", stream_id);
-                                    let mut slaves = server.slaves.lock().unwrap();
+                                    let mut slaves = server.slaves.lock().await;
                                     slaves.push(stream_id);
                                 }
                                 _ => {
@@ -203,7 +242,8 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     let sub = bulk2.as_str();
                                     match sub {
                                         "replication" => {
-                                            send_replication_info(&mut stream, &server)
+                                            server
+                                                .send_replication_info(&mut stream)
                                                 .await
                                                 .unwrap();
                                         }
@@ -272,62 +312,9 @@ async fn send_null_string(stream: &mut TcpStream) -> Result<(), Error> {
     Ok(())
 }
 
-async fn send_replication_info(stream: &mut TcpStream, server: &Server) -> Result<(), Error> {
-    let packet = PacketTypes::new_replication_info(server);
-    let info = packet.to_string();
-    stream.write_all(info.as_bytes()).await.unwrap();
-    Ok(())
-}
-
-async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
+pub async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
     let res = PacketTypes::SimpleString(value.to_string());
     let res = res.to_string();
     stream.write_all(res.as_bytes()).await.unwrap();
     Ok(())
-}
-
-async fn send_empty_rdb(stream: &mut TcpStream) -> Result<(), Error> {
-    let res = PacketTypes::RDB(get_rdb_bytes().to_vec());
-    let res = res.to_string();
-    stream
-        .write_all([res.as_bytes(), &EMPTY_RDB_FILE].concat().as_slice())
-        .await
-        .unwrap();
-    Ok(())
-}
-
-async fn add_pending_update(server: &Server, upadte: &String) {
-    println!("Debug: adding pending update: {}", upadte);
-    let mut pending_updates = server.pending_updates.lock().unwrap();
-    let hash_set_elements: HashSet<String> = server
-        .slaves
-        .lock()
-        .unwrap()
-        .iter()
-        .map(|f| f.clone())
-        .collect();
-    pending_updates.insert(upadte.clone(), hash_set_elements);
-}
-
-async fn apply_update(
-    pending_updates_map: Arc<Mutex<HashMap<String, HashSet<String>>>>,
-    stream: &mut TcpStream,
-) {
-    let mut pending_updates_map = pending_updates_map.lock().unwrap();
-    let pending_updates = pending_updates_map
-        .keys()
-        .map(|f| f.clone())
-        .collect::<Vec<String>>();
-    let stream_id = stream.peer_addr().unwrap().to_string();
-    for update in pending_updates {
-        let mut slaves = pending_updates_map.get_mut(&update).unwrap();
-        for slave in slaves.clone().into_iter() {
-            if slave != stream_id {
-                continue;
-            }
-            let update = update.clone();
-            stream.write_all(update.as_bytes()).await.unwrap();
-        }
-        slaves.remove(&stream_id);
-    }
 }

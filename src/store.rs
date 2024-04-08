@@ -1,6 +1,5 @@
 use std::time::SystemTime;
 use std::{collections::HashMap, sync::Mutex};
-
 pub struct Store {
     db: Mutex<HashMap<String, Entery>>,
 }

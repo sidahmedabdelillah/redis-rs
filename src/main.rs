@@ -55,17 +55,17 @@ async fn main() -> Result<(), Error> {
         None => Server::new(ServerRole::Master, port, host, None, None),
     };
 
-    let server = Arc::new(server);
+    let arc_server = Arc::new(server);
     let store = Arc::new(store::Store::new());
 
-    if server.role == ServerRole::Slave {
-        let client_server = Arc::clone(&server);
+    if arc_server.role == ServerRole::Slave {
+        let client_server = Arc::clone(&arc_server);
         tokio::spawn(async move {
             client::init_client(&client_server).await.unwrap();
         });
     }
 
-    init_server(&store, &server).await?;
+    init_server(&store, &arc_server).await?;
 
     return Ok(());
 }
