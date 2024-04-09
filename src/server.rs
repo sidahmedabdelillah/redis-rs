@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -71,7 +72,8 @@ impl Server {
         let slaves = server.slaves.lock().await;
         return Ok(slaves.contains(stream_id));
     }
-    pub async fn apply_pending_update(&self, stream: &mut TcpStream, stream_id: &String) {
+    pub async fn apply_pending_update(&self, conn: &Connection) {
+        let stream_id = &conn.stream_id;
         if let Ok(is_slave) = self.is_slave(stream_id).await {
             if !is_slave {
                 return;
@@ -96,7 +98,7 @@ impl Server {
             if slave.clone() == stream_id.clone() {
                 println!("Debug: applying update {} on server {}", update, stream_id);
                 pending_updates.remove(&(slave.to_string(), update.to_string()));
-                stream.write_all(update.as_bytes()).await.unwrap();
+                conn.send_data(update.as_bytes()).await;
             }
         }
     }
@@ -111,24 +113,23 @@ impl Server {
         }
     }
 
-    pub async fn send_empty_rdb(&self, stream: &mut TcpStream) -> Result<(), Error> {
+    pub async fn send_empty_rdb(&self, conn: &Connection) -> Result<(), Error> {
         let res = PacketTypes::RDB(get_rdb_bytes().to_vec());
         let res = res.to_string();
-        stream
-            .write_all([res.as_bytes(), &EMPTY_RDB_FILE].concat().as_slice())
-            .await
-            .unwrap();
+        conn.send_data([res.as_bytes(), &EMPTY_RDB_FILE].concat().as_slice())
+            .await;
         Ok(())
     }
 
-    pub async fn send_replication_info(&self, stream: &mut TcpStream) -> Result<(), Error> {
+    pub async fn send_replication_info(&self, conn: &Connection) -> Result<(), Error> {
         let packet = PacketTypes::new_replication_info(self);
         let info = packet.to_string();
-        stream.write_all(info.as_bytes()).await.unwrap();
+        conn.send_data(info.as_bytes()).await;
         Ok(())
     }
 
-    pub async fn add_slave(&self, stream_id: &String) {
+    pub async fn add_slave(&self, conn: &Connection) {
+        let stream_id = conn.stream_id.clone();
         println!("Debug: adding slave with id {}", stream_id);
         let slaves = &mut self.slaves.lock().await;
         slaves.push(stream_id.clone());
@@ -145,20 +146,42 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
     }
 }
 
-fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>) {
+pub struct Connection {
+    pub tcp_stream: Arc<Mutex<TcpStream>>,
+    pub stream_id: String,
+}
+
+impl Connection {
+    pub fn new(stream: TcpStream) -> Self {
+        let stream_id = stream.peer_addr().unwrap().to_string().clone();
+        Connection {
+            tcp_stream: Arc::new(Mutex::new(stream)),
+            stream_id: stream_id,
+        }
+    }
+    pub async fn send_data(&self, data: &[u8]) {
+        let stream = &mut self.tcp_stream.lock().await;
+        stream.write_all(data).await.unwrap();
+    }
+    pub async fn read_data(&self, data: &mut [u8; 512]) -> usize {
+        let stream = &mut self.tcp_stream.lock().await;
+        return stream.read(data).await.unwrap();
+    }
+}
+
+async fn handle_client(stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>) {
     let store = Arc::clone(store);
     let server = Arc::clone(&server);
 
-    let stream_id = stream.peer_addr().unwrap().to_string();
     tokio::spawn(async move {
         let mut buf = [0; 512];
+        let conn = Connection::new(stream);
         // In a loop, read data from the socket and write the data back.
         loop {
             tokio::select! {
-                    res = stream
-                            .read(&mut buf) => {
+                    res = conn.read_data(&mut buf) => {
 
-                    let n = res.unwrap();
+                    let n = res;
                     if n == 0 {
                         return;
                     }
@@ -205,7 +228,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                                                 bulk5.as_str().parse::<u64>().unwrap();
                                                             println!("debug: setting key {} with value {} and expiry {}", key, value,expire_time);
                                                             store.set_with_expiry(key, value, expire_time);
-                                                            send_ok(&mut stream).await.unwrap();
+                                                            send_ok(&conn).await.unwrap();
                                                         }
                                                         _ => {
                                                             println!(
@@ -221,24 +244,24 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                                         key, value
                                                     );
                                                     store.set(key, value);
-                                                    send_ok(&mut stream).await.unwrap();
+                                                    send_ok(&conn).await.unwrap();
                                                 }
                                             }
                                         }
                                         "REPLCONF" => {
-                                            send_ok(&mut stream).await.unwrap();
+                                            send_ok(&conn).await.unwrap();
                                         }
                                         "PSYNC" => {
                                             send_simple_string(
-                                                &mut stream,
+                                                &conn,
                                                 &format!("+FULLRESYNC {} 0", server.replid).to_string(),
                                             )
                                             .await
                                             .unwrap();
                                             let server = Arc::clone(&server);
-                                            server.send_empty_rdb(&mut stream).await.unwrap();
+                                            server.send_empty_rdb(&conn).await.unwrap();
 
-                                            server.add_slave(&stream_id).await
+                                            server.add_slave(&conn).await
                                         }
                                         _ => {
                                             println!("unsupported command {}", commande);
@@ -253,7 +276,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     let command = bulk1.as_str();
                                     match command.to_uppercase().as_str() {
                                         "ECHO" => {
-                                            send_bulk_string(&mut stream, &bulk2.to_string())
+                                            send_bulk_string(&conn, &bulk2.to_string())
                                                 .await
                                                 .unwrap();
                                         }
@@ -261,9 +284,9 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                             let key = bulk2.to_string();
                                             let value = store.get(key);
                                             if let Some(value) = value {
-                                                send_bulk_string(&mut stream, &value.value).await.unwrap();
+                                                send_bulk_string(&conn, &value.value).await.unwrap();
                                             } else {
-                                                send_null_string(&mut stream).await.unwrap();
+                                                send_null_string(&conn).await.unwrap();
                                             }
                                         }
                                         "INFO" => {
@@ -271,7 +294,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                             match sub {
                                                 "replication" => {
                                                     server
-                                                        .send_replication_info(&mut stream)
+                                                        .send_replication_info(&conn)
                                                         .await
                                                         .unwrap();
                                                 }
@@ -292,7 +315,7 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                                     let command = bulk1.as_str();
                                     match command.to_uppercase().as_str() {
                                         "PING" => {
-                                            send_pong(&mut stream).await.unwrap();
+                                            send_pong(&conn).await.unwrap();
                                         }
                                         _ => {
                                             println!("unsupported command {}", command);
@@ -309,42 +332,45 @@ fn handle_client(mut stream: TcpStream, store: &Arc<Store>, server: &Arc<Server>
                         }
                     }
                 }
+                // _ = server.apply_pending_update(&mut stream, &stream_id) => {
+                //     println!("Debug: applied pending updates");
+                // }
             }
         }
     });
 }
 
-async fn send_ok(stream: &mut TcpStream) -> Result<(), Error> {
+async fn send_ok(conn: &Connection) -> Result<(), Error> {
     let res = PacketTypes::SimpleString("OK".to_string());
     let ok = res.to_string();
-    stream.write_all(ok.as_bytes()).await.unwrap();
+    conn.send_data(ok.as_bytes()).await;
     Ok(())
 }
 
-async fn send_pong(stream: &mut TcpStream) -> Result<(), Error> {
+async fn send_pong(conn: &Connection) -> Result<(), Error> {
     let res = PacketTypes::SimpleString("PONG".to_string());
     let pong = res.to_string();
-    stream.write_all(pong.as_bytes()).await.unwrap();
+    conn.send_data(pong.as_bytes()).await;
     Ok(())
 }
 
-async fn send_bulk_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
+async fn send_bulk_string(conn: &Connection, value: &String) -> Result<(), Error> {
     let res = PacketTypes::BulkString(value.to_string());
     let res = res.to_string();
-    stream.write_all(res.as_bytes()).await.unwrap();
+    conn.send_data(res.as_bytes());
     Ok(())
 }
 
-async fn send_null_string(stream: &mut TcpStream) -> Result<(), Error> {
+async fn send_null_string(conn: &Connection) -> Result<(), Error> {
     let res = PacketTypes::NullBulkString;
     let res = res.to_string();
-    stream.write_all(res.as_bytes()).await.unwrap();
+    conn.send_data(res.as_bytes()).await;
     Ok(())
 }
 
-pub async fn send_simple_string(stream: &mut TcpStream, value: &String) -> Result<(), Error> {
+pub async fn send_simple_string(conn: &Connection, value: &String) -> Result<(), Error> {
     let res = PacketTypes::SimpleString(value.to_string());
     let res = res.to_string();
-    stream.write_all(res.as_bytes()).await.unwrap();
+    conn.send_data(res.as_bytes()).await;
     Ok(())
 }
