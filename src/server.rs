@@ -120,7 +120,7 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
     let addr = format!("{}:{}", &server.host, &server.port);
 
     let listener = TcpListener::bind(&addr).await?;
-    let (replication_tx, _replication_rx) = broadcast::channel::<String>(10);
+    let (replication_tx, _replication_rx) = broadcast::channel::<String>(1);
     loop {
         let (socket, _) = listener.accept().await?;
         let replication_tx = replication_tx.clone();
@@ -187,8 +187,8 @@ async fn handle_client(
                         return;
                     }
 
-                    let (packet, _) = decoder::parse_message(&buf[..n]).unwrap();
-
+                    let (packets, _) = decoder::parse_message(&buf[..n]).unwrap();
+                    for packet in packets {
                     match packet {
                         PacketTypes::Array(packets) => {
                             let packet1 = packets.get(0);
@@ -291,13 +291,14 @@ async fn handle_client(
                                         }
                                         "GET" => {
                                             let key = bulk2.to_string();
-                                            let value = store.get(key);
+                                            let value = store.get(&key);
                                             if let Some(value) = value {
                                                 server
                                                     .send_bulk_string(&conn, &value.value)
                                                     .await
                                                     .unwrap();
                                             } else {
+                                                println!("Debug: Key {} not found.", &key);
                                                 server.send_null_string(&conn).await.unwrap();
                                             }
                                         }
@@ -342,6 +343,7 @@ async fn handle_client(
                         _ => {
                             panic!("Commands must be of type array");
                         }
+                    }
                     }
                 }
             res = replication_rx.recv() => {

@@ -41,9 +41,9 @@ impl Store {
         db.insert(key, entry);
     }
 
-    pub fn get(&self, key: String) -> Option<Entery> {
+    pub fn get(&self, key: &String) -> Option<Entery> {
         let db = self.db.lock().unwrap();
-        if let Some(entery) = db.get(&key) {
+        if let Some(entery) = db.get(key) {
             if entery.expire_time == 0 {
                 return Some(entery.clone());
             }

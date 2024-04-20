@@ -1,6 +1,7 @@
-use anyhow::Error;
-
 use crate::Server;
+use anyhow::anyhow;
+use anyhow::Error;
+use anyhow::Result;
 
 #[derive(Debug)]
 pub enum PacketTypes {
@@ -12,7 +13,7 @@ pub enum PacketTypes {
 }
 
 impl PacketTypes {
-    pub fn new_replication_info(server: &Server) -> Self{
+    pub fn new_replication_info(server: &Server) -> Self {
         let mut text = format!("role:{}\n", server.role.to_string());
         let master_replid = match &server.master_replid {
             Some(replid) => replid,
@@ -54,7 +55,7 @@ impl PacketTypes {
                     result.push_str(&packet.to_string());
                 }
                 result
-            },
+            }
             PacketTypes::NullBulkString => "$-1\r\n".to_string(),
             PacketTypes::RDB(rdb) => {
                 let mut result = String::from("$");
@@ -111,8 +112,23 @@ fn parse_array(buffer: &[u8]) -> Result<(PacketTypes, usize), Error> {
     return Ok((PacketTypes::Array(array), pos));
 }
 
-pub fn parse_message(buffer: &[u8]) -> Result<(PacketTypes, usize), anyhow::Error> {
-    return PacketTypes::parse(buffer);
+pub fn parse_message(buffer: &[u8]) -> Result<(Vec<PacketTypes>, usize)> {
+    let end = buffer.len();
+    let mut packets: Vec<PacketTypes> = vec![];
+    let mut current_pos = 0;
+    loop {
+        if let Ok((packet, pos)) = PacketTypes::parse(buffer) {
+            packets.push(packet);
+            current_pos = pos; 
+            if pos == end {
+                break;
+            }
+        } else {
+            // error
+            return Err(anyhow!("Error parsing"));
+        }
+    }
+    return Ok((packets, current_pos));
 }
 
 fn read_until_crlf(buffer: &[u8]) -> Option<(&[u8], usize)> {
