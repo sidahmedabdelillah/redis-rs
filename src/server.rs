@@ -120,7 +120,7 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
     let addr = format!("{}:{}", &server.host, &server.port);
 
     let listener = TcpListener::bind(&addr).await?;
-    let (replication_tx, replication_rx) = broadcast::channel::<String>(10);
+    let (replication_tx, _replication_rx) = broadcast::channel::<String>(10);
     loop {
         let (socket, _) = listener.accept().await?;
         let replication_tx = replication_tx.clone();
@@ -349,7 +349,7 @@ async fn handle_client(
                 match res {
                     Ok(res) => {
                         println!("Received replication command");
-                        if(is_replication) {
+                        if is_replication {
                             conn.send_data(res.as_bytes()).await;
                         }
                     },
