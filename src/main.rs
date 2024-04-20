@@ -8,11 +8,9 @@ use server::{init_server, Server, ServerRole};
 
 mod client;
 mod decoder;
+mod rdb;
 mod server;
 mod store;
-mod rdb;
-
-
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -56,16 +54,19 @@ async fn main() -> Result<(), Error> {
     };
 
     let arc_server = Arc::new(server);
-    let store = Arc::new(store::Store::new());
+    let s: store::Store = store::Store::new();
+    let store = Arc::new(s);
+    let store_clone = Arc::clone(&store);
 
     if arc_server.role == ServerRole::Slave {
         let client_server = Arc::clone(&arc_server);
         tokio::spawn(async move {
-            client::init_client(&client_server).await.unwrap();
+            client::init_client(&store_clone, &client_server)
+                .await
+                .unwrap();
         });
     }
-
-    init_server(&store, &arc_server).await?;
+    init_server(&Arc::clone(&store), &arc_server).await?;
 
     return Ok(());
 }
