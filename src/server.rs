@@ -9,7 +9,7 @@ use rand::{distributions::Alphanumeric, thread_rng, Rng};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-use crate::decoder::{self, PacketTypes};
+use crate::decoder::{PacketTypes, Parser};
 use crate::rdb::{get_rdb_bytes, EMPTY_RDB_FILE};
 use crate::store::Store;
 
@@ -187,7 +187,8 @@ async fn handle_client(
                         return;
                     }
 
-                    let (packets, _) = decoder::parse_message(&buf[..n]).unwrap();
+                    let mut parser = Parser::new(buf[..n].to_vec());
+                    let packets = parser.parse().unwrap();
                     for packet in packets {
                     match packet {
                         PacketTypes::Array(packets) => {

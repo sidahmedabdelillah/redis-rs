@@ -1,6 +1,5 @@
-use std::{sync::Arc, vec};
-
 use anyhow::Error;
+use std::{sync::Arc, vec};
 
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -8,7 +7,7 @@ use tokio::{
 };
 
 use crate::{
-    decoder::{self, PacketTypes},
+    decoder::{PacketTypes, Parser},
     server::Server,
     store::Store,
 };
@@ -26,6 +25,15 @@ impl<'a> Client<'a> {
         let commands = PacketTypes::Array(commands);
         let str = commands.to_string();
         self.stream.write_all(str.as_bytes()).await.unwrap();
+    }
+
+    pub async fn send_replconf_offset(&mut self, offset: u64) {
+        self.send_commands(vec![
+            "REPLCONF".to_string(),
+            "ACK".to_string(),
+            offset.to_string(),
+        ])
+        .await;
     }
 }
 
@@ -75,30 +83,23 @@ pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Erro
         .await;
 
     let store = Arc::clone(store);
-    let buf = &mut [0; 1024];
 
-    let mut handshake_buf: [u8; 128] = [0; 128];
-    let n = client.stream.read(&mut handshake_buf).await.unwrap();
-
-    if let Ok(buff_string) = std::str::from_utf8(&handshake_buf[..n]) {
-        println!("Debug: got message from master {}", buff_string);
-    }
-
-    let _ = client.stream.read(&mut handshake_buf).await.unwrap();
-
+    println!("Debug: handshake with master done. into the loop we go");
     loop {
+        let buf = &mut [0; 2048];
+
+        println!("Debug: loop iteration");
         let res = client.stream.read(buf).await;
+        println!("DEBUG: client got data from master");
         let n = res.unwrap();
         if n == 0 {
+            println!("The n is zero breaking");
             break;
         }
 
-        if let Ok(buff_string) = std::str::from_utf8(&buf[..n]) {
-            println!("Debug: got message from master {}", buff_string);
-        }
-
-        let (packets, _) = decoder::parse_message(&buf[..n]).unwrap();
-
+        let mut parser = Parser::new(buf[..n].to_vec());
+        let packets = parser.parse().unwrap();
+        println!("Debug: got {} packets on read from master", packets.len());
         for packet in packets {
             match packet {
                 PacketTypes::Array(packets) => {
@@ -152,7 +153,19 @@ pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Erro
                                         }
                                     }
                                 }
-
+                                "REPLCONF" => {
+                                    println!("Debug: got REPLCONF commande from master");
+                                    let subcommand = bulk2.as_str();
+                                    let value = bulk3.as_str();
+                                    match (subcommand, value) {
+                                        ("GETACK", "*") => {
+                                            client.send_replconf_offset(0).await;
+                                        }
+                                        any => {
+                                            println!("Debug: client cant handle {} {} variation of REPLCONF", any.0,any.1)
+                                        }
+                                    }
+                                }
                                 _ => {
                                     println!("unsupported command {}", commande);
                                 }
@@ -160,6 +173,12 @@ pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Erro
                         }
                         _ => {}
                     }
+                }
+                PacketTypes::SimpleString(simple_string) => {
+                    println!("Debug: client got simple string {simple_string}");
+                },
+                PacketTypes::RDB(_) => {
+                    println!("Debug: client got RDB file from server");
                 }
                 _ => {}
             }

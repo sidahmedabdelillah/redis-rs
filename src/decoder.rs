@@ -1,15 +1,146 @@
+
+
 use crate::Server;
 use anyhow::anyhow;
 use anyhow::Error;
 use anyhow::Result;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PacketTypes {
     SimpleString(String),
     BulkString(String),
     NullBulkString,
     Array(Vec<PacketTypes>),
     RDB(Vec<u8>),
+}
+
+pub struct Parser {
+    buffer: Vec<u8>,
+    pos: usize,
+}
+
+impl Parser {
+    pub fn new(buffer: Vec<u8>) -> Self {
+        Parser { buffer, pos: 0 }
+    }
+
+    fn read_exact(&mut self, size: usize) -> Result<&[u8]> {
+        if self.buffer.len() < self.pos + size {
+            return Err(anyhow!("Buffer too small"));
+        }
+        let data = &self.buffer[self.pos..self.pos + size];
+        self.pos += size;
+        return Ok(data);
+    }
+
+    fn read_until_crlf(&mut self) -> Result<&[u8]> {
+        let mut i = self.pos;
+        while i < self.buffer.len() {
+            if self.buffer[i - 1] == b'\r' && self.buffer[i] == b'\n' {
+                let data = &self.buffer[self.pos..(i - 1)];
+                self.pos = i + 1;
+                return Ok(data);
+            }
+            i += 1;
+        }
+        return Err(anyhow!("Can't find CRLF"));
+    }
+
+    fn is_done_parsing(&self) -> bool {
+        return self.pos == self.buffer.len();
+    }
+
+    fn get_left_to_read(&self) -> usize {
+        return self.buffer.len() - self.pos;
+    }
+
+    fn peek_ahead(&self, n: usize) -> u8 {
+        return self.buffer[self.pos + n];
+    }
+
+    // parsing
+    fn parse_simple_string(&mut self) -> Result<PacketTypes, Error> {
+        if let Ok(simple_string) = self.read_until_crlf() {
+            let simple_string = std::str::from_utf8(simple_string)?.to_string();
+            return Ok(PacketTypes::SimpleString(simple_string));
+        } else {
+            return Err(anyhow::anyhow!("Can't parse simple string"));
+        }
+    }
+
+    fn parse_bulk_string(&mut self) -> Result<PacketTypes, Error> {
+        let bulk_str_len = if let Ok(bulk_str_len) = self.read_until_crlf() {
+            let bulk_str_len = std::str::from_utf8(bulk_str_len)?.parse::<usize>()?;
+            bulk_str_len
+        } else {
+            return Err(anyhow::anyhow!("Invalid command"));
+        };
+    
+        // let end_of_bulk_str = pos + bulk_str_len;
+        let left_to_read = self.get_left_to_read();
+        if left_to_read == bulk_str_len {
+            let data = self.read_exact(bulk_str_len)?.to_vec();
+            return Ok(PacketTypes::RDB(data));
+        }
+    
+        if self.peek_ahead(bulk_str_len) == b'\r' {
+            let string_bytes = self.read_exact(bulk_str_len)?;
+            let string = std::str::from_utf8(string_bytes)?.to_string();
+            self.read_exact(2)?;
+            return Ok(PacketTypes::BulkString(string));
+        } else {
+            let data = self.read_exact(bulk_str_len)?.to_vec();
+            return Ok(PacketTypes::RDB(data));
+        }
+    }
+
+    fn parse_array(&mut self) -> Result<PacketTypes, Error> {
+        let array_len = if let Ok(array_len_bytes) = self.read_until_crlf() {
+            let array_len_str = std::str::from_utf8(array_len_bytes)?;
+            let array_len = array_len_str.parse::<usize>()?;
+            array_len
+        } else {
+            return Err(anyhow::anyhow!("can't read to crlf"));
+        };
+    
+        let mut array = Vec::new();
+        for _ in 0..array_len {
+            let packet = self.parse_packet()?;
+            array.push(packet);
+        }
+    
+        return Ok(PacketTypes::Array(array));
+    }
+
+    fn parse_packet(&mut self) -> Result<PacketTypes, Error> {
+        let first_char = self.read_exact(1)?[0];
+        match first_char as char {
+            '+' => {
+                return self.parse_simple_string();
+            }
+            '$' => {
+                return self.parse_bulk_string();
+            }
+            '*' => {
+                return self.parse_array();
+            }
+            _ => {
+                return Err(anyhow::anyhow!("Invalid start {}", first_char));
+            }
+        }
+    }
+
+    pub fn parse(&mut self) -> Result<Vec<PacketTypes>> {
+        let mut packets: Vec<PacketTypes> = vec![];
+        while !self.is_done_parsing() {
+            if let Ok(packet) = self.parse_packet() {
+                packets.push(packet);
+            } else {
+                return Err(anyhow!("Error parsing"));
+            }
+        }
+        Ok(packets)
+    }
 }
 
 impl PacketTypes {
@@ -25,23 +156,7 @@ impl PacketTypes {
         return packet;
     }
 
-    pub fn parse(buffer: &[u8]) -> Result<(Self, usize), Error> {
-        match buffer[0] as char {
-            '+' => {
-                return parse_simple_string(buffer);
-            }
-            '$' => {
-                return parse_bulk_string(buffer);
-            }
-            '*' => {
-                return parse_array(buffer);
-            }
-            _ => {
-                println!("Invalid command {}", buffer[0] as char);
-                return Err(anyhow::anyhow!("Invalid command {}", buffer[0]));
-            }
-        }
-    }
+    
 
     pub fn to_string(&self) -> String {
         match self {
@@ -67,76 +182,8 @@ impl PacketTypes {
     }
 }
 
-fn parse_simple_string(buffer: &[u8]) -> Result<(PacketTypes, usize), Error> {
-    if let Some((simple_string, pos)) = read_until_crlf(&buffer[1..]) {
-        let simple_string = std::str::from_utf8(simple_string)?.to_string();
-        return Ok((PacketTypes::SimpleString(simple_string), pos));
-    } else {
-        return Err(anyhow::anyhow!("Can't parse simple string"));
-    }
-}
 
-fn parse_bulk_string(buffer: &[u8]) -> Result<(PacketTypes, usize), Error> {
-    let (bulk_str_len, pos) = if let Some((bulk_str_len, pos)) = read_until_crlf(&buffer[1..]) {
-        let bulk_str_len = std::str::from_utf8(bulk_str_len)?.parse::<usize>()?;
-        (bulk_str_len, pos)
-    } else {
-        return Err(anyhow::anyhow!("Invalid command"));
-    };
 
-    let end_of_bulk_str = pos + bulk_str_len;
 
-    let string = std::str::from_utf8(&buffer[pos..end_of_bulk_str]).unwrap();
 
-    let total_parsed = end_of_bulk_str + 2;
-    return Ok((PacketTypes::BulkString(string.to_string()), total_parsed));
-}
 
-fn parse_array(buffer: &[u8]) -> Result<(PacketTypes, usize), Error> {
-    let (array_len, mut pos) = if let Some((array_len, pos)) = read_until_crlf(&buffer[1..]) {
-        let array_len_str = std::str::from_utf8(array_len)?;
-        let array_len = array_len_str.parse::<usize>()?;
-        (array_len, pos)
-    } else {
-        println!("can't read to crlf");
-        return Err(anyhow::anyhow!("Invalid command"));
-    };
-
-    let mut array = Vec::new();
-    for _ in 0..array_len {
-        let (packet, len) = PacketTypes::parse(&buffer[pos..])?;
-        array.push(packet);
-        pos += len;
-    }
-
-    return Ok((PacketTypes::Array(array), pos));
-}
-
-pub fn parse_message(buffer: &[u8]) -> Result<(Vec<PacketTypes>, usize)> {
-    let end = buffer.len();
-    let mut packets: Vec<PacketTypes> = vec![];
-    let mut current_pos = 0;
-    loop {
-        if let Ok((packet, pos)) = PacketTypes::parse(buffer) {
-            packets.push(packet);
-            current_pos = pos; 
-            if pos == end {
-                break;
-            }
-        } else {
-            // error
-            return Err(anyhow!("Error parsing"));
-        }
-    }
-    return Ok((packets, current_pos));
-}
-
-fn read_until_crlf(buffer: &[u8]) -> Option<(&[u8], usize)> {
-    for i in 1..buffer.len() {
-        if buffer[i - 1] == b'\r' && buffer[i] == b'\n' {
-            return Some((&buffer[0..(i - 1)], i + 2 as usize));
-        }
-    }
-
-    return None;
-}
