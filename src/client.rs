@@ -14,6 +14,8 @@ use crate::{
 
 struct Client<'a> {
     stream: &'a mut TcpStream,
+    is_tracking_ack: bool,
+    tracked_changed: u64,
 }
 
 impl<'a> Client<'a> {
@@ -35,6 +37,17 @@ impl<'a> Client<'a> {
         ])
         .await;
     }
+
+    pub fn activate_replication_tracking(&mut self) {
+        self.is_tracking_ack = true;
+    }
+
+    pub fn track_packed_replication(&mut self, packet: &PacketTypes){
+        if self.is_tracking_ack {
+            let bytes = packet.to_bytes();
+            self.tracked_changed += bytes.len() as u64;
+        }
+    }
 }
 
 pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Error> {
@@ -47,6 +60,8 @@ pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Erro
 
     let mut client = Client {
         stream: &mut stream,
+        is_tracking_ack: false,
+        tracked_changed: 0,
     };
 
     let mut handshake_buf: [u8; 128] = [0; 128];
@@ -101,6 +116,7 @@ pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Erro
         let packets = parser.parse().unwrap();
         println!("Debug: got {} packets on read from master", packets.len());
         for packet in packets {
+            client.track_packed_replication(&packet);
             match packet {
                 PacketTypes::Array(packets) => {
                     let packet1 = packets.get(0);
@@ -159,7 +175,8 @@ pub async fn init_client(store: &Arc<Store>, server: &Server) -> Result<(), Erro
                                     let value = bulk3.as_str();
                                     match (subcommand, value) {
                                         ("GETACK", "*") => {
-                                            client.send_replconf_offset(0).await;
+                                            client.activate_replication_tracking();
+                                            client.send_replconf_offset(client.tracked_changed).await;
                                         }
                                         any => {
                                             println!("Debug: client cant handle {} {} variation of REPLCONF", any.0,any.1)

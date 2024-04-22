@@ -180,6 +180,10 @@ impl PacketTypes {
             }
         }
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.to_string().into_bytes()
+    }
 }
 
 
