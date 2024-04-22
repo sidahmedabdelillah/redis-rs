@@ -7,7 +7,9 @@ use rand::{thread_rng, Rng};
 use server::{init_server, Server, ServerRole};
 
 mod client;
+mod commade;
 mod decoder;
+mod event_handler;
 mod rdb;
 mod server;
 mod store;

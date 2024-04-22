@@ -1,5 +1,3 @@
-
-
 use crate::Server;
 use anyhow::anyhow;
 use anyhow::Error;
@@ -76,14 +74,14 @@ impl Parser {
         } else {
             return Err(anyhow::anyhow!("Invalid command"));
         };
-    
+
         // let end_of_bulk_str = pos + bulk_str_len;
         let left_to_read = self.get_left_to_read();
         if left_to_read == bulk_str_len {
             let data = self.read_exact(bulk_str_len)?.to_vec();
             return Ok(PacketTypes::RDB(data));
         }
-    
+
         if self.peek_ahead(bulk_str_len) == b'\r' {
             let string_bytes = self.read_exact(bulk_str_len)?;
             let string = std::str::from_utf8(string_bytes)?.to_string();
@@ -115,13 +113,13 @@ impl Parser {
         } else {
             return Err(anyhow::anyhow!("can't read to crlf"));
         };
-    
+
         let mut array = Vec::new();
         for _ in 0..array_len {
             let packet = self.parse_packet()?;
             array.push(packet);
         }
-    
+
         return Ok(PacketTypes::Array(array));
     }
 
@@ -136,7 +134,7 @@ impl Parser {
             }
             '*' => {
                 return self.parse_array();
-            },
+            }
             ':' => {
                 return self.parse_integer();
             }
@@ -172,8 +170,6 @@ impl PacketTypes {
         return packet;
     }
 
-    
-
     pub fn to_string(&self) -> String {
         match self {
             PacketTypes::SimpleString(s) => format!("+{}\r\n", s),
@@ -202,9 +198,3 @@ impl PacketTypes {
         self.to_string().into_bytes()
     }
 }
-
-
-
-
-
-

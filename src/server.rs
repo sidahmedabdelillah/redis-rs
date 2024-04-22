@@ -6,10 +6,12 @@ use tokio::sync::{broadcast, Mutex};
 
 use anyhow::Error;
 use rand::{distributions::Alphanumeric, thread_rng, Rng};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
 
+use crate::commade::{Command, InfoSubCommand};
 use crate::decoder::{PacketTypes, Parser};
+use crate::event_handler::server_event_handler::{Connection, ServerHandler};
 use crate::rdb::{get_rdb_bytes, EMPTY_RDB_FILE};
 use crate::store::Store;
 
@@ -61,7 +63,7 @@ impl Server {
             replicat_of,
             replid,
             master_replid,
-            number_of_replication
+            number_of_replication,
         }
     }
 
@@ -129,9 +131,9 @@ impl Server {
 
     pub async fn send_number_of_replications(&self, conn: &Connection) -> Result<(), Error> {
         let number_of_replication = self.number_of_replication.lock().await;
-        let res = PacketTypes::Integer(*number_of_replication as i64);
-        let res = res.to_string();
-        conn.send_data(res.as_bytes()).await;
+        self.send_integer(conn, *number_of_replication as i64)
+            .await
+            .unwrap();
         Ok(())
     }
 }
@@ -149,31 +151,6 @@ pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(),
     }
 }
 
-#[derive(Clone)]
-pub struct Connection {
-    pub tcp_stream: Arc<Mutex<TcpStream>>,
-    pub stream_id: String,
-}
-
-impl Connection {
-    pub fn new(stream: TcpStream) -> Self {
-        let stream_id = stream.peer_addr().unwrap().to_string().clone();
-        Connection {
-            tcp_stream: Arc::new(Mutex::new(stream)),
-            stream_id: stream_id,
-        }
-    }
-    pub async fn send_data(&self, data: &[u8]) {
-        let stream = &mut self.tcp_stream.lock().await;
-        stream.write_all(data).await.unwrap();
-    }
-
-    pub async fn read_data(&self, data: &mut [u8; 512]) -> Result<usize, std::io::Error> {
-        let stream = &mut self.tcp_stream.lock().await;
-        return stream.read(data).await;
-    }
-}
-
 async fn handle_client(
     stream: TcpStream,
     store: &Arc<Store>,
@@ -186,7 +163,8 @@ async fn handle_client(
 
     tokio::spawn(async move {
         let mut buf = [0; 512];
-        let conn = Connection::new(stream);
+        let server_handler = ServerHandler::new(stream);
+        let conn = server_handler.connection;
         let mut is_replication = false;
         // In a loop, read data from the socket and write the data back.
         loop {
@@ -210,167 +188,82 @@ async fn handle_client(
                     let mut parser = Parser::new(buf[..n].to_vec());
                     let packets = parser.parse().unwrap();
                     for packet in packets {
-                    match packet {
-                        PacketTypes::Array(packets) => {
-                            let packet1 = packets.get(0);
-                            let packet2 = packets.get(1);
-                            let packet3 = packets.get(2);
+                    let commande = Command::try_from(packet).unwrap();
 
-                            match (packet1, packet2, packet3) {
-                                (
-                                    Some(PacketTypes::BulkString(bulk1)),
-                                    Some(PacketTypes::BulkString(bulk2)),
-                                    Some(PacketTypes::BulkString(bulk3)),
-                                ) => {
-                                    let commande = bulk1.as_str().to_uppercase();
-                                    match commande.as_str() {
-                                        "SET" => {
-                                            // raw command string from buf
-                                            let raw_command =
-                                                std::str::from_utf8(&buf[..n]).unwrap().to_string();
-                                            replication_tx.send(raw_command).unwrap();
-                                            // add to pending updates
-                                            let server = Arc::clone(&server);
-
-                                            let key = bulk2.to_string();
-                                            let value = bulk3.to_string();
-
-                                            let cmd2 = packets.get(3);
-                                            let cmd3 = packets.get(4);
-
-                                            match (cmd2, cmd3) {
-                                                (
-                                                    Some(PacketTypes::BulkString(bulk4)),
-                                                    Some(PacketTypes::BulkString(bulk5)),
-                                                ) => {
-                                                    let commande = bulk4.as_str().to_uppercase();
-                                                    match commande.as_str() {
-                                                        "PX" => {
-                                                            let expire_time = bulk5
-                                                                .as_str()
-                                                                .parse::<u64>()
-                                                                .unwrap();
-                                                            println!("debug: setting key {} with value {} and expiry {}", key, value,expire_time);
-                                                            store.set_with_expiry(
-                                                                key,
-                                                                value,
-                                                                expire_time,
-                                                            );
-                                                            server.send_ok(&conn).await.unwrap();
-                                                        }
-                                                        _ => {
-                                                            println!(
-                                                            "unsupported sub commande {} for SET",
-                                                            commande
-                                                        );
-                                                        }
-                                                    }
-                                                }
-                                                _ => {
-                                                    println!(
-                                                        "debug: setting key {} with value {}",
-                                                        key, value
-                                                    );
-                                                    store.set(key, value);
-                                                    server.send_ok(&conn).await.unwrap();
-                                                }
-                                            }
-                                        }
-                                        "REPLCONF" => {
-                                            server.send_ok(&conn).await.unwrap();
-                                        }
-                                        "PSYNC" => {
-                                            server
-                                                .send_simple_string(
-                                                    &conn,
-                                                    &format!("+FULLRESYNC {} 0", server.replid)
-                                                        .to_string(),
-                                                )
-                                                .await
-                                                .unwrap();
-                                            let server = Arc::clone(&server);
-                                            server.send_empty_rdb(&conn).await.unwrap();
-                                            is_replication = true;
-                                            server.add_replication().await;
-                                        },
-                                        "WAIT" => {
-                                            server.send_number_of_replications(&conn).await.unwrap();
-                                        }
-                                        _ => {
-                                            println!("unsupported command {}", commande);
-                                        }
-                                    }
-                                }
-                                (
-                                    Some(PacketTypes::BulkString(bulk1)),
-                                    Some(PacketTypes::BulkString(bulk2)),
-                                    None,
-                                ) => {
-                                    let command = bulk1.as_str();
-                                    match command.to_uppercase().as_str() {
-                                        "ECHO" => {
-                                            server
-                                                .send_bulk_string(&conn, &bulk2.to_string())
-                                                .await
-                                                .unwrap();
-                                        }
-                                        "GET" => {
-                                            let key = bulk2.to_string();
-                                            let value = store.get(&key);
-                                            if let Some(value) = value {
-                                                server
-                                                    .send_bulk_string(&conn, &value.value)
-                                                    .await
-                                                    .unwrap();
-                                            } else {
-                                                println!("Debug: Key {} not found.", &key);
-                                                server.send_null_string(&conn).await.unwrap();
-                                            }
-                                        }
-                                        "INFO" => {
-                                            let sub = bulk2.as_str();
-                                            match sub {
-                                                "replication" => {
-                                                    server
-                                                        .send_replication_info(&conn)
-                                                        .await
-                                                        .unwrap();
-                                                }
-                                                _ => {
-                                                    println!(
-                                                        "unsupported sub command for INFO : {}",
-                                                        command
-                                                    );
-                                                }
-                                            }
-                                        }
-                                        _ => {
-                                            println!("unsupported command {}", command);
-                                        }
-                                    }
-                                }
-                                (Some(PacketTypes::BulkString(bulk1)), None, None) => {
-                                    let command = bulk1.as_str();
-                                    match command.to_uppercase().as_str() {
-                                        "PING" => {
-                                            server.send_pong(&conn).await.unwrap();
-                                        }
-                                        _ => {
-                                            println!("unsupported command {}", command);
-                                        }
-                                    }
-                                }
+                    match commande {
+                        Command::Set {
+                            key,
+                            value,
+                            expire_time,
+                        } => {
+                            let raw_command =std::str::from_utf8(&buf[..n]).unwrap().to_string();
+                            replication_tx.send(raw_command).unwrap();
+                            if let Some(expiration_time) = expire_time {
+                                store.set_with_expiry(key, value, expiration_time);
+                                server.send_ok(&conn).await.unwrap();
+                            } else {
+                                store.set(key, value);
+                                server.send_ok(&conn).await.unwrap();
+                            }
+                        },
+                        Command::Get(key) => {
+                            let value = store.get(&key);
+                            if let Some(value) = value {
+                                server
+                                    .send_bulk_string(&conn, &value.value)
+                                    .await
+                                    .unwrap();
+                            } else {
+                                println!("Debug: Key {} not found.", &key);
+                                server.send_null_string(&conn).await.unwrap();
+                            }
+                        },
+                        Command::Replconf(_) => {
+                           server.send_ok(&conn).await.unwrap();
+                        },
+                        Command::Psync => {
+                            server
+                                .send_simple_string(
+                                    &conn,
+                                    &format!("+FULLRESYNC {} 0", server.replid)
+                                        .to_string(),
+                                )
+                                .await
+                                .unwrap();
+                            let server = Arc::clone(&server);
+                            server.send_empty_rdb(&conn).await.unwrap();
+                            is_replication = true;
+                            server.add_replication().await;
+                        },
+                        Command::Wait => {
+                            server.send_number_of_replications(&conn).await.unwrap();
+                        },
+                        Command::Echo(str) => {
+                            server
+                                .send_bulk_string(&conn, &str)
+                                .await
+                                .unwrap()
+                        },
+                        Command::Info(info_cmd) => {
+                            match info_cmd  {
+                                InfoSubCommand::Replication => {
+                                    server
+                                        .send_replication_info(&conn)
+                                        .await
+                                        .unwrap();
+                                },
                                 _ => {
-                                    panic!("Commands must be of type array");
+                                    println!("unsupported sub command for INFO");
                                 }
                             }
+                        },
+                        Command::Ping => {
+                            server.send_pong(&conn).await.unwrap();
                         }
-                        _ => {
-                            panic!("Commands must be of type array");
-                        }
-                    }
+                        _ => { todo!( )}
                     }
                 }
+            }
             res = replication_rx.recv() => {
                 // log
                 match res {
