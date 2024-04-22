@@ -8,6 +8,7 @@ use anyhow::Result;
 #[derive(Debug, Clone)]
 pub enum PacketTypes {
     SimpleString(String),
+    Integer(i64),
     BulkString(String),
     NullBulkString,
     Array(Vec<PacketTypes>),
@@ -94,6 +95,18 @@ impl Parser {
         }
     }
 
+    fn parse_integer(&mut self) -> Result<PacketTypes, Error> {
+        let integer = if let Ok(integer_bytes) = self.read_until_crlf() {
+            let integer_str = std::str::from_utf8(integer_bytes)?;
+            let integer = integer_str.parse::<i64>()?;
+            self.read_until_crlf().unwrap(); // read the crlf
+            integer
+        } else {
+            return Err(anyhow::anyhow!("can't read to crlf"));
+        };
+        return Ok(PacketTypes::Integer(integer));
+    }
+
     fn parse_array(&mut self) -> Result<PacketTypes, Error> {
         let array_len = if let Ok(array_len_bytes) = self.read_until_crlf() {
             let array_len_str = std::str::from_utf8(array_len_bytes)?;
@@ -123,6 +136,9 @@ impl Parser {
             }
             '*' => {
                 return self.parse_array();
+            },
+            ':' => {
+                return self.parse_integer();
             }
             _ => {
                 return Err(anyhow::anyhow!("Invalid start {}", first_char));
@@ -172,6 +188,7 @@ impl PacketTypes {
                 result
             }
             PacketTypes::NullBulkString => "$-1\r\n".to_string(),
+            PacketTypes::Integer(i) => format!(":{}\r\n", i),
             PacketTypes::RDB(rdb) => {
                 let mut result = String::from("$");
                 result.push_str(&rdb.len().to_string());

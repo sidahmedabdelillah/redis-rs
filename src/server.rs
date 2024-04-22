@@ -114,6 +114,13 @@ impl Server {
         conn.send_data(res.as_bytes()).await;
         Ok(())
     }
+
+    pub async fn send_integer(&self, conn: &Connection, value: i64) -> Result<(), Error> {
+        let res = PacketTypes::Integer(value);
+        let res = res.to_string();
+        conn.send_data(res.as_bytes()).await;
+        Ok(())
+    }
 }
 
 pub async fn init_server(store: &Arc<Store>, server: &Arc<Server>) -> Result<(), Error> {
@@ -271,6 +278,9 @@ async fn handle_client(
                                             let server = Arc::clone(&server);
                                             server.send_empty_rdb(&conn).await.unwrap();
                                             is_replication = true;
+                                        },
+                                        "WAIT" => {
+                                            server.send_integer(&conn, 0).await.unwrap();
                                         }
                                         _ => {
                                             println!("unsupported command {}", commande);
