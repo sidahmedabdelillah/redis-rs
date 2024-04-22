@@ -35,7 +35,7 @@ pub struct Server {
     pub replicat_of: Option<(String, String)>,
     pub replid: String,
     pub master_replid: Option<String>,
-    pub slaves: Arc<Mutex<Vec<String>>>,
+    pub number_of_replication: Arc<Mutex<u64>>,
 }
 
 impl Server {
@@ -51,9 +51,9 @@ impl Server {
             .take(40)
             .map(char::from)
             .collect();
-        let slaves = Arc::new(Mutex::new(Vec::new()));
         let pending_updates = Arc::new(Mutex::new(HashSet::<(String, String)>::new()));
         let _shared_pending_updates = Arc::clone(&pending_updates);
+        let number_of_replication = Arc::new(Mutex::new(0));
         Server {
             role,
             port,
@@ -61,8 +61,13 @@ impl Server {
             replicat_of,
             replid,
             master_replid,
-            slaves,
+            number_of_replication
         }
+    }
+
+    pub async fn add_replication(&self) {
+        let mut number_of_replication = self.number_of_replication.lock().await;
+        *number_of_replication += 1;
     }
 
     pub async fn send_empty_rdb(&self, conn: &Connection) -> Result<(), Error> {
@@ -117,6 +122,14 @@ impl Server {
 
     pub async fn send_integer(&self, conn: &Connection, value: i64) -> Result<(), Error> {
         let res = PacketTypes::Integer(value);
+        let res = res.to_string();
+        conn.send_data(res.as_bytes()).await;
+        Ok(())
+    }
+
+    pub async fn send_number_of_replications(&self, conn: &Connection) -> Result<(), Error> {
+        let number_of_replication = self.number_of_replication.lock().await;
+        let res = PacketTypes::Integer(*number_of_replication as i64);
         let res = res.to_string();
         conn.send_data(res.as_bytes()).await;
         Ok(())
@@ -278,9 +291,10 @@ async fn handle_client(
                                             let server = Arc::clone(&server);
                                             server.send_empty_rdb(&conn).await.unwrap();
                                             is_replication = true;
+                                            server.add_replication().await;
                                         },
                                         "WAIT" => {
-                                            server.send_integer(&conn, 0).await.unwrap();
+                                            server.send_number_of_replications(&conn).await.unwrap();
                                         }
                                         _ => {
                                             println!("unsupported command {}", commande);
